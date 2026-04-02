@@ -2,7 +2,7 @@ db=~/db
 soft=~/miniconda3
 wd=~/meta
 ## 1.2 Fastp Quality Control(质量控制)
-1
+2
     # Create a directory to record software versions and citations
     # 创建目录，记录软件版本和引文
     mkdir -p temp/qc result/qc
