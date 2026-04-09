@@ -81,4 +81,28 @@ wd=~/meta
     # Human data should be published as dehosted files to reduce the risk of privacy leaks.
     # 人类数据建议发布去宿主后的文件，减少隐私泄露风险
 
+    ##  3.1 Assemble (组装)
+
+    # Start working environment (启动工作环境)
+    conda activate megahit
+### MEGAHIT Assembly (组装)
+
+    # Delete directory for rerun (删除旧文件夹才能重新运行)
+    # /bin/rm -rf temp/megahit
+    # Assembly，demo 3p 80m, TB may n days (TB数据要几天)
+    megahit -v # MEGAHIT v1.2.9
+    /usr/bin/time -v megahit -t 3 \
+        -1 `tail -n+2 result/metadata.txt|cut -f1|sed 's/^/temp\/hr\//;s/$/_1.fastq/'|tr '\n' ','|sed 's/,$//'` \
+        -2 `tail -n+2 result/metadata.txt|cut -f1|sed 's/^/temp\/hr\//;s/$/_2.fastq/'|tr '\n' ','|sed 's/,$//'` \
+        -o temp/megahit 
+    # Stat contig size, 160M, eg. 18sample 100G data 10h contigs 1.8G
+    # If too many contigs, filter by length to reduce data and improve gene integrity. See appendix megahit
+    # 如果contigs太多，可以按长度筛选，降低数据量，提高基因完整度，详见附录megahit
+    seqkit stat temp/megahit/final.contigs.fa
+    # Preview first 6 rows and 60 characters each line (预览重叠群最前6行，前60列字符)
+    head -n6 temp/megahit/final.contigs.fa | cut -c1-60
+    # Delete temporary files (删除临时文件)
+    /bin/rm -rf temp/megahit/intermediate_contigs
+
+
     

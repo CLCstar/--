@@ -80,5 +80,113 @@ wd=~/meta
     rm temp/qc/*.fastq
     # Human data should be published as dehosted files to reduce the risk of privacy leaks.
     # 人类数据建议发布去宿主后的文件，减少隐私泄露风险
+    
+##  3.1 Assemble (组装)
 
+    # Start working environment (启动工作环境)
+    conda activate megahit
+    
+### MEGAHIT Assembly (组装)
+
+    # Delete directory for rerun (删除旧文件夹才能重新运行)
+    # /bin/rm -rf temp/megahit
+    # Assembly，demo 3p 80m, TB may n days (TB数据要几天)
+    megahit -v # MEGAHIT v1.2.9
+    /usr/bin/time -v megahit -t 3 \
+        -1 `tail -n+2 result/metadata.txt|cut -f1|sed 's/^/temp\/hr\//;s/$/_1.fastq/'|tr '\n' ','|sed 's/,$//'` \
+        -2 `tail -n+2 result/metadata.txt|cut -f1|sed 's/^/temp\/hr\//;s/$/_2.fastq/'|tr '\n' ','|sed 's/,$//'` \
+        -o temp/megahit 
+    # Stat contig size, 160M, eg. 18sample 100G data 10h contigs 1.8G
+    # If too many contigs, filter by length to reduce data and improve gene integrity. See appendix megahit
+    # 如果contigs太多，可以按长度筛选，降低数据量，提高基因完整度，详见附录megahit
+    seqkit stat temp/megahit/final.contigs.fa
+    # Preview first 6 rows and 60 characters each line (预览重叠群最前6行，前60列字符)
+    head -n6 temp/megahit/final.contigs.fa | cut -c1-60
+    # Delete temporary files (删除临时文件)
+    /bin/rm -rf temp/megahit/intermediate_contigs
+## 3.2 Gene prediction, cluster & quantitfy(基因预测、去冗余和定量)
+
+### metaProdigal Gene prediction (基因预测)
+
+    # Input file: Assembled sequences temp/megahit/final.contigs.fa
+    # Output file: Gene sequence predicted by prodigal temp/prodigal/gene.fa
+    # For large gene sequences, refer to the appendix for prodigal gene file splitting and parallel computation.
+    # 输入文件：组装的序列 result/megahit/final.contigs.fa
+    # 输出文件：prodigal预测的基因序列 temp/prodigal/gene.fa
+    # 基因大，可参考附录prodigal拆分基因文件，并行计算
+
+    mkdir -p temp/prodigal
+    # prodigal meta mode, 8m, > and 2>&1 record gene.log, ~1G 1h
+    time prodigal -i temp/megahit/final.contigs.fa \
+        -d temp/prodigal/gene.fa \
+        -o temp/prodigal/gene.gff \
+        -p meta -f gff > temp/prodigal/gene.log 2>&1 
+    # Check if the log has completed (查看日志是否运行完成)
+    tail temp/prodigal/gene.log
+    # Count of genes (基因数量) 261K, 6G18s3M
+    seqkit stat temp/prodigal/gene.fa 
+    # Count complete genes, if the data volume is large, select complete gene, 73K
+    # 统计完整基因数量，数据量大可只用完整基因部分
+    grep -c 'partial=00' temp/prodigal/gene.fa 
+    # Select complete gene (提取完整基因)
+    seqkit grep -n -r -p "partial=00" temp/prodigal/gene.fa > temp/prodigal/full_length.fa
+    seqkit stat temp/prodigal/full_length.fa
+
+    ### cd-hit cluster & redundancy (基因聚类/去冗余)
+
+    # Input file: gene sequences predicted by prodigal temp/prodigal/gene.fa
+    # Output files: Deredundant gene and protein sequences: result/NR/nucleotide.fa, result/NR/protein.fa
+    # 输入文件：prodigal预测的基因序列 temp/prodigal/gene.fa
+    # 输出文件：去冗余后的基因和蛋白序列：result/NR/nucleotide.fa, result/NR/protein.fa
+
+    mkdir -p result/NR
+    # aS coverage, c similarity, G local alignment, g optimal solution, T multithreading, M memory 0 unlimited
+    # aS覆盖度，c相似度，G局部比对，g最优解，T多线程，M内存0不限制
+    # 2M 384p 8m，3M384p15m，2千万需要2000h，多线程可加速
+    time cd-hit-est -i temp/prodigal/gene.fa \
+        -o result/NR/nucleotide.fa \
+        -aS 0.9 -c 0.95 -G 0 -g 0 -T 0 -M 0
+    # Counting the number of non-redundant genes, the number of genes in a single assembly does not decrease significantly, such as 3M-2M. Multiple batch assemblies show high redundancy.
+    # 统计非冗余基因数量，单次拼接结果数量下降不大，如3M-2M，多批拼接冗余度高
+    grep -c '>' result/NR/nucleotide.fa
+    # Translate nucleic acids into corresponding protein sequences, and use `--trim` to remove trailing asterisks.
+    # 翻译核酸为对应蛋白序列, --trim去除结尾的*
+    seqkit translate --trim result/NR/nucleotide.fa \
+        > result/NR/protein.fa 
+    # Redundancy removal for both batches of data was accelerated using cd-hit-est-2d, see appendix.
+    # 两批数据去冗余使用cd-hit-est-2d加速，见附录
+    ### salmon quantitfy (基因定量)
+
+    # Input file: Redundancy-free gene sequence: result/NR/nucleotide.fa
+    # Output file: Salmon quantification: result/salmon/gene.count, gene.TPM
+    # 输入文件：去冗余后的基因序列：result/NR/nucleotide.fa
+    # 输出文件：Salmon定量：result/salmon/gene.count, gene.TPM
+
+    mkdir -p temp/salmon
+    salmon -v # 1.10.3
+
+    # build index, -t sequence, -i index (建索引, -t序列, -i 索引, 2m)
+    time salmon index -t result/NR/nucleotide.fa \
+      -p 3 -i temp/salmon/index 
+
+    # Quantitative: -l automatic library type selection, p threads, --meta metagenomics
+    # 定量，l文库类型自动选择，p线程，--meta宏基因组, 10s
+    i=C1
+    time salmon quant -i temp/salmon/index -l A -p 3 --meta \
+        -1 temp/hr/${i}_1.fastq -2 temp/hr/${i}_2.fastq \
+        -o temp/salmon/${i}.quant
+    i=Y1
+    time salmon quant -i temp/salmon/index -l A -p 3 --meta \
+        -1 temp/hr/${i}_1.fastq -2 temp/hr/${i}_2.fastq \
+        -o temp/salmon/${i}.quant
+
+    # Merge (合并)
+    mkdir -p result/salmon
+    salmon quantmerge --quants temp/salmon/*.quant \
+        -o result/salmon/gene.TPM
+    salmon quantmerge --quants temp/salmon/*.quant \
+        --column NumReads -o result/salmon/gene.count
+    sed -i '1 s/.quant//g' result/salmon/gene.*
+    # Preview (预览结果)
+    head -n3 result/salmon/gene.*
     
